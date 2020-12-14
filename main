@@ -1,0 +1,101 @@
+import boto3
+import pandas as pd
+import numpy as np
+import csv
+import datetime
+import time
+from sqlalchemy import create_engine
+
+def toDB (dataframes,tables,method,engine):
+    tablenumber=0
+    n=0
+    for df in dataframes:
+        assignedtable=tables[tablenumber]
+        methodus=method[n] 
+        try:
+            sqlEngine =create_engine(engine, pool_recycle=3600)
+            dbConnection=sqlEngine.connect()
+            frame=df.to_sql(assignedtable, dbConnection, if_exists=methodus, index=False);
+            tablenumber=tablenumber+1
+            n=n+1
+        except ValueError as vx:
+            print(vx)
+        except Exception as ex:   
+            print(ex)
+        else:
+            print("Table ",assignedtable," created successfully.");   
+        finally:
+            dbConnection.close()
+     
+     
+#Load Credenrtials
+ACCESS_KEY=''
+SECRET_KEY=''
+SESSION_TOKEN=''
+REGION=''
+client = boto3.client('logs',
+    aws_access_key_id=ACCESS_KEY,
+    aws_secret_access_key=SECRET_KEY,
+    aws_session_token=SESSION_TOKEN,
+    region_name=REGION)
+    
+ 
+resp=client.filter_log_events(logGroupName='/aws/elasticbeanstalk/YOURWEBSITE/var/log/nginx/access.log',startTime=1598918400000,filterPattern="Googlebot")
+df=pd.DataFrame(resp['events'])
+n=0
+
+while "nextToken" in resp.keys():
+    try:
+        resp=client.filter_log_events(logGroupName='/aws/elasticbeanstalk/YOURWEBSITE/var/log/nginx/access.log',nextToken=resp["nextToken"],startTime=1598918400000,filterPattern="Googlebot")
+        df=df.append((resp['events']), ignore_index=True)
+        n=n+1
+        print(n)
+    except:
+        print("An error occurred!")
+        
+#Drop Colums and leave only message[NOT FOR MTS]         
+#columns_to_drop=["logStreamName","timestamp","ingestionTime","eventId"]
+#df=df.drop(columns=columns_to_drop,axis=1)
+
+#Split to Columns
+new=df["message"].str.split('"',expand=True)
+new2=new[0].str.split(' - - ',expand=True)
+new3=new[1].str.split(' ',expand=True)
+new4=new[0].str.split(' ',expand=True)
+
+#Drop Colums and leave only message               
+columns_to_drop=["logStreamName","timestamp","ingestionTime","eventId"]
+df=df.drop(columns=columns_to_drop,axis=1)
+
+#Split to Columns
+new=df["message"].str.split('"',expand=True)
+new2=new[0].str.split(' - - ',expand=True)
+new3=new[1].str.split(' ',expand=True)
+new4=new[0].str.split(' ',expand=True)
+
+#Elaborate final Dataframe
+logs=pd.DataFrame()
+logs["ip_address"]=new4[0]
+logs["datetime"]=new2[1].str[1:-8]
+logs['datetime'] = pd.to_datetime(logs['datetime'], format = "%d/%b/%Y:%H:%M:%S")
+logs["method"]=new3[0]
+logs["address"]=new3[1]
+logs["address"] = 'https://www.mytopsportsbooks.com' + logs["address"].astype(str)
+logs["status_code"]=new[2].str[0:4]
+logs["status_code"]=logs["status_code"].astype(str).astype(int)
+logs["protocol"]=new3[2]
+logs["user agent"]=new[5]
+logs['hits']=1
+folders = logs["address"].str.split("/", expand = True)
+folders=folders.replace(r'^\s*$', np.nan, regex=True)
+folders[3]=folders[3].fillna('Homepage')
+logs['folder']=folders[3]
+logs['subfolder']=folders[4]
+
+
+#Upload to database
+dataframes=[logs]
+tables=['']
+method=['']
+engine='mysql+pymysql://USER:PASSWORD@IP_ADDRESS/DATABASE_NAME'
+toDB(dataframes,tables,method,engine)
